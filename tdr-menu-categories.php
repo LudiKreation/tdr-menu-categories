@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Taverne du Roy – Menu de catégories (page Commander)
- * Description: Barre collante en haut de la carte Orderable : un lien par catégorie, défilement doux vers la section, catégorie en cours mise en évidence. Toute la carte reste affichée.
- * Version: 1.0.0
+ * Description: Barre de catégories au-dessus de la carte Orderable, qui s'accroche sous l'en-tête du site au défilement. Défilement doux vers la catégorie, catégorie en cours mise en évidence. Toute la carte reste affichée.
+ * Version: 1.2.1
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -14,16 +14,6 @@ defined( 'ABSPATH' ) || exit;
 /** Slug(s) des pages où afficher la barre. */
 function tdr_menu_pages(): array {
 	return array( 'click-collect-de-la-taverne-du-roy' );
-}
-
-/**
- * Sélecteur CSS des titres de catégories.
- * Laisser vide : les titres sont détectés automatiquement.
- * Si la détection se trompe, inspecter un titre de catégorie (ex. "ENTRÉES")
- * et indiquer sa classe ici, par exemple '.orderable-xxx__title'.
- */
-function tdr_menu_heading_selector(): string {
-	return '';
 }
 
 /* ==========================================================================
@@ -40,15 +30,9 @@ add_action( 'wp_head', function () {
 	}
 	?>
 	<style id="tdr-menu-css">
-		.tdr-catnav {
-			position: sticky;
-			top: var(--tdr-catnav-top, 0px);
-			z-index: 90;
-			margin: 0 0 1.5em;
-			background: #fff;
-			border-bottom: 1px solid rgba(0,0,0,.1);
-			box-shadow: 0 4px 10px -8px rgba(0,0,0,.25);
-		}
+		.tdr-catnav-wrap { margin: 0 0 1.5em; }
+		.tdr-catnav { z-index: 9990; background: transparent; }
+		.tdr-catnav.is-pinned a.tdr-catnav__link { box-shadow: 0 2px 6px rgba(0,0,0,.15); }
 		.tdr-catnav__list {
 			display: flex; gap: .4em;
 			margin: 0; padding: .6em .25em;
@@ -57,15 +41,16 @@ add_action( 'wp_head', function () {
 			scrollbar-width: none; -webkit-overflow-scrolling: touch;
 		}
 		.tdr-catnav__list::-webkit-scrollbar { display: none; }
-		.tdr-catnav__list li { margin: 0; padding: 0; flex: 0 0 auto; }
-		.tdr-catnav__link {
+		.tdr-catnav__list li { margin: 0; padding: 0; flex: 0 0 auto; list-style: none; }
+		.tdr-catnav__list li::before { display: none; }
+		a.tdr-catnav__link {
 			display: inline-block; padding: .45em 1em;
-			border: 1px solid rgba(0,0,0,.2); border-radius: 999px;
-			color: inherit; font-size: .9em; font-weight: 600; text-decoration: none;
-			transition: background-color .15s, color .15s, border-color .15s;
+			border: 1px solid #B99272; border-radius: 999px; background: #fff;
+			color: #000; font-size: .9em; font-weight: 600; line-height: 1.2; text-decoration: none;
+			transition: background-color .15s, color .15s;
 		}
-		.tdr-catnav__link:hover, .tdr-catnav__link:focus { border-color: currentColor; color: inherit; text-decoration: none; }
-		.tdr-catnav__link.is-active { background: #000; border-color: #000; color: #fff; }
+		a.tdr-catnav__link:hover, a.tdr-catnav__link:focus { background: #f6efe9; color: #000; text-decoration: none; }
+		a.tdr-catnav__link.is-active { background: #B99272; color: #fff; }
 	</style>
 	<?php
 } );
@@ -75,109 +60,126 @@ add_action( 'wp_enqueue_scripts', function () {
 		return;
 	}
 
-	$config = array( 'headingSelector' => tdr_menu_heading_selector() );
-
 	$js = <<<'JS'
 (function () {
-	var cfg = window.tdrMenu || {};
-
-	function slugify(s) {
-		return 'cat-' + s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-			.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-	}
-
-	function commonAncestor(nodes) {
-		if (!nodes.length) { return null; }
-		var anc = nodes[0].parentElement;
-		while (anc && !nodes.every(function (n) { return anc.contains(n); })) { anc = anc.parentElement; }
-		return anc;
-	}
-
-	/* ---------- Repérage des titres de catégories ---------- */
-
-	function findCategoryHeadings() {
-		if (cfg.headingSelector) {
-			return Array.prototype.slice.call(document.querySelectorAll(cfg.headingSelector));
-		}
-
-		// Zone de la carte : ancêtre commun des boutons Orderable ("Ajouter", "Sélectionner").
-		var buttons = Array.prototype.slice.call(document.querySelectorAll(
-			'button[class*="orderable"], a[class*="orderable"], [class*="orderable"] button, [class*="orderable"] .button'
-		));
-		var root = commonAncestor(buttons);
-		if (!root) { return []; }
-
-		// Un titre de produit est seul dans sa carte (le plus petit bloc qui contient un bouton) ;
-		// un titre de catégorie partage ce bloc avec les titres des produits.
-		var headings = Array.prototype.slice.call(root.querySelectorAll('h1, h2, h3, h4'));
-		return headings.filter(function (h) {
-			var box = h.parentElement;
-			while (box && box !== root.parentElement && !box.querySelector('button, .button, a[class*="button"]')) {
-				box = box.parentElement;
-			}
-			if (!box) { return false; }
-			return box.querySelectorAll('h1, h2, h3, h4').length > 1;
-		});
-	}
-
-	/* ---------- Construction ---------- */
-
 	function build() {
 		if (document.querySelector('.tdr-catnav')) { return; }
-		var heads = findCategoryHeadings();
+
+		var main = document.querySelector('.orderable-main');
+		if (!main) { return; }
+		var heads = Array.prototype.slice.call(main.querySelectorAll('.orderable-category-heading__title'));
 		if (heads.length < 2) { return; }
 
+		/* ---------- Construction : juste au-dessus de la première catégorie ---------- */
+
+		var wrap = document.createElement('div');
+		wrap.className = 'tdr-catnav-wrap';
 		var nav = document.createElement('nav');
 		nav.className = 'tdr-catnav';
 		nav.setAttribute('aria-label', 'Catégories de la carte');
 		var ul = document.createElement('ul');
 		ul.className = 'tdr-catnav__list';
 
-		heads.forEach(function (h) {
-			var label = h.textContent.trim();
-			if (!h.id) { h.id = slugify(label); }
+		heads.forEach(function (h, i) {
+			var group = h.closest('.orderable-main__group');
+			var id = (group && group.id) || h.id || ('tdr-cat-' + i);
+			if (!group && !h.id) { h.id = id; }
 			var li = document.createElement('li');
 			var a = document.createElement('a');
 			a.className = 'tdr-catnav__link';
-			a.href = '#' + h.id;
-			a.textContent = label;
+			a.href = '#' + id;
+			a.textContent = h.textContent.trim();
 			li.appendChild(a);
 			ul.appendChild(li);
 		});
 		nav.appendChild(ul);
+		wrap.appendChild(nav);
 
-		// Placée dans le bloc qui contient toutes les catégories, pour rester collée sur toute la carte.
-		var container = commonAncestor(heads) || heads[0].parentElement;
-		container.insertBefore(nav, container.firstChild);
+		var sections = main.querySelector('.orderable-main__sections');
+		main.insertBefore(wrap, sections || main.firstChild);
 
 		var links = Array.prototype.slice.call(nav.querySelectorAll('a'));
 
-		/* Hauteur des éléments fixes en haut d'écran (barre d'admin, en-tête Elementor collant). */
-		function fixedTop() {
-			var top = 0;
-			var bar = document.getElementById('wpadminbar');
-			if (bar && getComputedStyle(bar).position === 'fixed') { top += bar.offsetHeight; }
-			document.querySelectorAll('header, .elementor-location-header, [data-elementor-type="header"], .elementor-sticky--active').forEach(function (el) {
-				var pos = getComputedStyle(el).position;
-				var r = el.getBoundingClientRect();
-				if ((pos === 'fixed' || pos === 'sticky') && r.top <= top + 1 && r.height > 0 && r.height < window.innerHeight / 2) {
-					top = Math.max(top, r.bottom);
-				}
-			});
-			return Math.round(top);
+		/* ---------- Hauteur occupée en haut d'écran par les éléments fixes (barre d'admin, en-tête) ---------- */
+
+		function fixedAncestor(el) {
+			for (var n = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+				var pos = getComputedStyle(n).position;
+				if (pos === 'fixed' || pos === 'sticky') { return n; }
+			}
+			return null;
 		}
 
-		function offset() { return fixedTop() + nav.offsetHeight + 12; }
+		function fixedTop() {
+			var y = 0;
+			var candidates = Array.prototype.slice.call(document.querySelectorAll(
+				'#wpadminbar, .kf-header, .kf-navbar, .kf-topline, header, [data-elementor-type="header"], .elementor-sticky--active'
+			));
+			// Éléments réellement présents en haut de l'écran (3 points sur la largeur).
+			for (var pass = 0; pass < 5; pass++) {
+				var found = y;
+				[0.15, 0.5, 0.85].forEach(function (fx) {
+					document.elementsFromPoint(Math.round(window.innerWidth * fx), y + 1).forEach(function (el) {
+						if (!el.closest('.tdr-catnav')) { candidates.push(el); }
+					});
+				});
+				candidates.forEach(function (el) {
+					var f = fixedAncestor(el);
+					if (!f || f.closest('.tdr-catnav')) { return; }
+					var r = f.getBoundingClientRect();
+					var st = getComputedStyle(f);
+					if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) { return; }
+					if (r.top <= y + 1 && r.bottom > y + 1 && r.height > 0 && r.height < window.innerHeight / 2) {
+						found = Math.max(found, r.bottom);
+					}
+				});
+				if (found > y) { y = found; } else { break; }
+			}
+			return Math.round(y);
+		}
 
-		function updateTop() { nav.style.setProperty('--tdr-catnav-top', fixedTop() + 'px'); }
+		/* ---------- Accroche : la barre se fixe quand elle atteint le bas de l'en-tête ---------- */
 
-		function setActive() {
-			var limit = offset() + 5, current = 0;
+		var pinned = false;
+
+		function unpin() {
+			if (!pinned) { return; }
+			pinned = false;
+			nav.classList.remove('is-pinned');
+			nav.style.position = nav.style.top = nav.style.left = nav.style.width = '';
+			wrap.appendChild(nav);
+			wrap.style.height = '';
+		}
+
+		function updatePin(top) {
+			var w = wrap.getBoundingClientRect();
+			var m = main.getBoundingClientRect();
+			var h = nav.offsetHeight;
+			var shouldPin = w.top <= top && m.bottom - h > top;
+			if (shouldPin) {
+				if (!pinned) {
+					wrap.style.height = h + 'px';
+					document.body.appendChild(nav);
+				}
+				pinned = true;
+				nav.classList.add('is-pinned');
+				nav.style.position = 'fixed';
+				nav.style.top = top + 'px';
+				nav.style.left = w.left + 'px';
+				nav.style.width = w.width + 'px';
+			} else {
+				unpin();
+			}
+		}
+
+		/* ---------- Catégorie en cours ---------- */
+
+		function setActive(top) {
+			var limit = top + nav.offsetHeight + 20, current = 0;
 			heads.forEach(function (h, i) { if (h.getBoundingClientRect().top <= limit) { current = i; } });
 			links.forEach(function (a, i) {
 				var on = i === current;
-				if (on && !a.classList.contains('is-active')) {
-					// Garde l'onglet actif visible dans la barre (mobile).
+				if (on && !a.classList.contains('is-active') && pinned) {
 					ul.scrollTo({ left: a.offsetLeft - ul.clientWidth / 2 + a.offsetWidth / 2, behavior: 'smooth' });
 				}
 				a.classList.toggle('is-active', on);
@@ -185,25 +187,32 @@ add_action( 'wp_enqueue_scripts', function () {
 			});
 		}
 
+		/* ---------- Clic : défilement doux sous l'en-tête et la barre ---------- */
+
 		links.forEach(function (a, i) {
 			a.addEventListener('click', function (e) {
 				e.preventDefault();
-				var y = heads[i].getBoundingClientRect().top + window.pageYOffset - offset();
+				var target = heads[i].closest('.orderable-main__group') || heads[i];
+				var y = target.getBoundingClientRect().top + window.pageYOffset - fixedTop() - nav.offsetHeight - 10;
 				window.scrollTo({ top: y, behavior: 'smooth' });
 				if (history.replaceState) { history.replaceState(null, '', a.hash); }
 			});
 		});
 
 		var ticking = false;
-		function onScroll() {
+		function refresh() {
 			if (ticking) { return; }
 			ticking = true;
-			requestAnimationFrame(function () { updateTop(); setActive(); ticking = false; });
+			requestAnimationFrame(function () {
+				var top = fixedTop();
+				updatePin(top);
+				setActive(top);
+				ticking = false;
+			});
 		}
-		window.addEventListener('scroll', onScroll, { passive: true });
-		window.addEventListener('resize', onScroll);
-		updateTop();
-		setActive();
+		window.addEventListener('scroll', refresh, { passive: true });
+		window.addEventListener('resize', function () { unpin(); refresh(); });
+		refresh();
 	}
 
 	if (document.readyState === 'loading') {
@@ -211,12 +220,11 @@ add_action( 'wp_enqueue_scripts', function () {
 	} else {
 		build();
 	}
-	window.addEventListener('load', build); // si la carte est rendue plus tard
+	window.addEventListener('load', build);
 })();
 JS;
 
-	wp_register_script( 'tdr-menu-categories', false, array(), '1.0.0', true );
+	wp_register_script( 'tdr-menu-categories', false, array(), '1.2.1', true );
 	wp_enqueue_script( 'tdr-menu-categories' );
-	wp_add_inline_script( 'tdr-menu-categories', 'window.tdrMenu = ' . wp_json_encode( $config ) . ';', 'before' );
 	wp_add_inline_script( 'tdr-menu-categories', $js );
 } );
